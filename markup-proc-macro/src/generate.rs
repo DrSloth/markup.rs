@@ -40,6 +40,7 @@ impl ToTokens for Struct {
                 #struct_fields
             }
             impl #impl_generics #name #ty_generics #where_clause {
+                /// An inlined version of to_string which uses [`markup::Render`]
                 #[inline]
                 pub fn to_string(&self) -> String {
                     let mut string = String::with_capacity(#size_hint);
