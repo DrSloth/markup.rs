@@ -12,6 +12,12 @@ readme = "README.md"
 keywords = ["template", "html", "markup", "pug", "haml"]
 categories = ["template-engine"]
 
+[features]
+raw_disp = []
+
+default = ["raw_disp"]
+
 [dependencies]
 markup-proc-macro = { path = "../markup-proc-macro", version = "0.13.1" }
 itoa = { version = "1.0.6", optional = true }
+

@@ -1,11 +1,9 @@
-use std::fmt::Write;
-
 pub use markup_proc_macro::{define, new};
 
 mod escape;
 
 pub trait Render {
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result;
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()>;
 }
 
 pub trait RenderAttributeValue: Render {
@@ -25,38 +23,20 @@ pub trait RenderAttributeValue: Render {
     }
 }
 
-impl<'a, T: Render + ?Sized> Render for &'a T {
-    #[inline]
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
-        T::render(self, writer)
+impl<T: Render + Copy> Render for &T {
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+        (*self).render(writer)
     }
 }
 
-impl<'a, T: RenderAttributeValue + ?Sized> RenderAttributeValue for &'a T {
+impl<T: Render> Render for Box<T> {
     #[inline]
-    fn is_none(&self) -> bool {
-        T::is_none(self)
-    }
-
-    #[inline]
-    fn is_true(&self) -> bool {
-        T::is_true(self)
-    }
-
-    #[inline]
-    fn is_false(&self) -> bool {
-        T::is_false(self)
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+        T::render(*self, writer)
     }
 }
 
-impl<T: Render + ?Sized> Render for Box<T> {
-    #[inline]
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
-        T::render(self, writer)
-    }
-}
-
-impl<T: RenderAttributeValue + ?Sized> RenderAttributeValue for Box<T> {
+impl<T: RenderAttributeValue> RenderAttributeValue for Box<T> {
     #[inline]
     fn is_none(&self) -> bool {
         T::is_none(self)
@@ -75,8 +55,12 @@ impl<T: RenderAttributeValue + ?Sized> RenderAttributeValue for Box<T> {
 
 impl Render for bool {
     #[inline]
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
-        write!(writer, "{}", self)
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+        if self {
+            writer.write_all(b"true")
+        } else {
+            writer.write_all(b"false")
+        }
     }
 }
 
@@ -94,7 +78,7 @@ impl RenderAttributeValue for bool {
 
 impl<T: Render> Render for Option<T> {
     #[inline]
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
         match self {
             Some(t) => t.render(writer),
             None => Ok(()),
@@ -109,20 +93,42 @@ impl<T: RenderAttributeValue> RenderAttributeValue for Option<T> {
     }
 }
 
-struct Raw<T: std::fmt::Display>(T);
+#[cfg(feature="raw_disp")]
+mod _raw_disp {
+    use super::{Render, RenderAttributeValue};
+    
+    pub struct Raw<T: std::fmt::Display>(pub T);
 
-impl<T: std::fmt::Display> Render for Raw<T> {
-    #[inline]
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
-        write!(writer, "{}", self.0)
+    impl<T: std::fmt::Display> Render for Raw<T> {
+        #[inline]
+        fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+            write!(writer, "{}", self.0)
+        }
+    }
+
+    impl<T: std::fmt::Display> RenderAttributeValue for Raw<T> {}
+}
+
+#[cfg(feature="raw_disp")]
+#[inline(always)]
+pub fn raw_disp(value: impl std::fmt::Display) -> impl Render + RenderAttributeValue {
+    _raw_disp::Raw(value)
+}
+
+pub struct RawBytes<T: AsRef<[u8]>>(T);
+
+impl<T: AsRef<[u8]>> Render for RawBytes<T> {
+    #[inline(always)]
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+        writer.write_all(self.0.as_ref())
     }
 }
 
-impl<T: std::fmt::Display> RenderAttributeValue for Raw<T> {}
+impl<T: AsRef<[u8]>> RenderAttributeValue for RawBytes<T> {}
 
-#[inline]
-pub fn raw(value: impl std::fmt::Display) -> impl Render + RenderAttributeValue {
-    Raw(value)
+#[inline(always)]
+pub fn raw_bytes<T: AsRef<[u8]>>(raw: T) -> impl Render {
+    RawBytes(raw)
 }
 
 macro_rules! tfor {
@@ -132,11 +138,23 @@ macro_rules! tfor {
     (@extract { $($tt:tt)* }) => { $($tt)* };
 }
 
+
+impl Render for char {
+    #[inline(always)]
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+        let mut b = [0u8;4];
+        self.encode_utf8(&mut b);
+        writer.write_all(&b)
+    }
+}
+
+impl RenderAttributeValue for char {}
+
 tfor! {
-    for Ty in [char, f32, f64] {
+    for Ty in [f32, f64] {
         impl Render for Ty {
             #[inline]
-            fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
+            fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
                 write!(writer, "{}", self)
             }
         }
@@ -150,11 +168,12 @@ tfor! {
     for Ty in [u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize] {
         impl Render for Ty {
             #[inline]
-            fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
+            fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
                 #[cfg(feature = "itoa")] {
                     let mut buffer = itoa::Buffer::new();
-                    let str = buffer.format(*self);
-                    writer.write_str(str)
+                    let str = buffer.format(self);
+                    writer.write(str.as_bytes())?;
+                    Ok(())
                 }
                 #[cfg(not(feature = "itoa"))] {
                     write!(writer, "{}", self)
@@ -167,40 +186,31 @@ tfor! {
     }
 }
 
-impl Render for str {
+impl Render for &str {
     #[inline]
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
-        escape::escape(self, writer)
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+        escape::escape(self.as_bytes(), writer)
     }
 }
 
-impl RenderAttributeValue for str {}
+impl RenderAttributeValue for &str {}
 
 impl Render for String {
     #[inline]
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
         self.as_str().render(writer)
     }
 }
 
 impl RenderAttributeValue for String {}
 
-impl Render for std::fmt::Arguments<'_> {
-    #[inline]
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
-        escape::Escape(writer).write_fmt(*self)
-    }
-}
-
-impl RenderAttributeValue for std::fmt::Arguments<'_> {}
-
 macro_rules! tuple_impl {
     ($($ident:ident)+) => {
         impl<$($ident: Render,)+> Render for ($($ident,)+) {
             #[allow(non_snake_case)]
             #[inline]
-            fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
-                let ($(ref $ident,)+) = *self;
+            fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+                let ($($ident,)+) = self;
                 $($ident.render(writer)?;)+
                 Ok(())
             }
@@ -223,31 +233,25 @@ tuple_impl! { A B C D E F G H I }
 tuple_impl! { A B C D E F G H I J }
 
 pub struct DynRender<'a> {
-    f: Box<dyn Fn(&mut dyn std::fmt::Write) -> std::fmt::Result + 'a>,
+    f: Box<dyn Fn(&mut dyn std::io::Write) -> std::io::Result<()> + 'a>,
 }
 
 pub fn new<'a, F>(f: F) -> DynRender<'a>
 where
-    F: Fn(&mut dyn std::fmt::Write) -> std::fmt::Result + 'a,
+    F: Fn(&mut dyn std::io::Write) -> std::io::Result<()> + 'a,
 {
     DynRender { f: Box::new(f) }
 }
 
 impl<'a> Render for DynRender<'a> {
     #[inline]
-    fn render(&self, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
         (self.f)(writer)
-    }
-}
-
-impl<'a> std::fmt::Display for DynRender<'a> {
-    #[inline]
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Render::render(self, fmt)
     }
 }
 
 #[inline]
 pub fn doctype() -> impl Render {
-    raw("<!DOCTYPE html>")
+    raw_bytes(b"<!DOCTYPE html>")
 }
+

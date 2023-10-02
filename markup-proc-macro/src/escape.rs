@@ -1,31 +1,43 @@
-pub fn escape(str: &str, writer: &mut impl std::fmt::Write) -> std::fmt::Result {
+pub fn escape(str: &[u8], writer: &mut impl std::io::Write) -> std::io::Result<()> {
     let mut last = 0;
-    for (index, byte) in str.bytes().enumerate() {
+    for (index, byte) in str.iter().enumerate() {
         macro_rules! go {
             ($expr:expr) => {{
-                writer.write_str(&str[last..index])?;
-                writer.write_str($expr)?;
-                last = index + 1;
+                // SAFETY: We know that last < index and that index is valid
+                unsafe {
+                    writer.write_all(&str.get_unchecked(last..index))?;
+                }
+                writer.write_all($expr)?;
+                // This will only wrap if index reaches usize::MAX
+                last = index.wrapping_add(1);
             }};
         }
 
         match byte {
-            b'&' => go!("&amp;"),
-            b'<' => go!("&lt;"),
-            b'>' => go!("&gt;"),
-            b'"' => go!("&quot;"),
+            b'&' => go!(b"&amp;"),
+            b'<' => go!(b"&lt;"),
+            b'>' => go!(b"&gt;"),
+            b'"' => go!(b"&quot;"),
             _ => {}
         }
     }
-    writer.write_str(&str[last..])
+
+    // SAFETY: last can only overflow if str.len() == usize::MAX but slices can at max be isize::MAX
+    unsafe {
+        writer.write_all(str.get_unchecked(last..))
+    }
 }
 
 pub struct Escape<'a, W>(pub &'a mut W);
 
-impl<W: std::fmt::Write> std::fmt::Write for Escape<'_, W> {
+impl<W: std::io::Write> std::io::Write for Escape<'_, W> {
     #[inline]
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        escape(s, &mut self.0)
+    fn write(&mut self, s: &[u8]) -> std::io::Result<usize> {
+        escape(s, &mut self.0).map(|()| s.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
     }
 }
 
@@ -50,15 +62,15 @@ fn test() {
     );
 
     fn t(input: &str, output: &str) {
-        let mut string = String::new();
-        escape(input, &mut string).unwrap();
-        assert_eq!(string, output);
+        let mut string = Vec::new();
+        escape(input.as_bytes(), &mut string).unwrap();
+        assert_eq!(string, output.as_bytes());
     }
 }
 
 #[test]
 fn test_arguments() {
-    use std::fmt::Write;
+    use std::io::Write;
 
     t("", "&quot;&quot;");
     t("<", "&quot;&lt;&quot;");
@@ -80,8 +92,8 @@ fn test_arguments() {
     t('<', "'&lt;'");
 
     fn t(input: impl std::fmt::Debug, output: &str) {
-        let mut string = String::new();
+        let mut string = Vec::new();
         write!(Escape(&mut string), "{}", format_args!("{:?}", input)).unwrap();
-        assert_eq!(string, output);
+        assert_eq!(string, output.as_bytes());
     }
 }

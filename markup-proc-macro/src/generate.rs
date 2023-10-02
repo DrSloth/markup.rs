@@ -14,7 +14,7 @@ impl ToTokens for Struct {
             where_clause,
             fields,
             children,
-            size_hint,
+            size_hint: _size_hint,
         } = self;
         let mut stream = Stream::default();
         children.generate(&mut stream);
@@ -28,6 +28,7 @@ impl ToTokens for Struct {
             let ty = &field.ty;
             struct_fields.extend(quote! {
                 #(#attrs)*
+                /// Generated parameter for rendering.
                 pub #name: #ty,
             });
             splat_fields.extend(quote! {
@@ -40,26 +41,17 @@ impl ToTokens for Struct {
                 #struct_fields
             }
             impl #impl_generics #name #ty_generics #where_clause {
-                /// An inlined version of to_string which uses [`markup::Render`]
-                #[inline]
-                pub fn to_string(&self) -> String {
-                    let mut string = String::with_capacity(#size_hint);
-                    // Ignoring the result because writing to a String can't fail.
-                    let _ = ::markup::Render::render(self, &mut string);
-                    string
+                /// Write this Element to the given string via [`markup::Render`]
+                #[inline(always)]
+                pub fn write_to_vec(self, sbuf: &mut Vec<u8>) -> std::io::Result<()> {
+                    <Self as ::markup::Render>::render(self, sbuf)
                 }
             }
             impl #impl_generics ::markup::Render for #name #ty_generics #where_clause {
-                fn render(&self, __writer: &mut impl std::fmt::Write) -> std::fmt::Result {
+                fn render(self, __writer: &mut impl std::io::Write) -> std::io::Result<()> {
                     let #name { #splat_fields } = self;
                     #built
                     Ok(())
-                }
-            }
-            impl #impl_generics std::fmt::Display for #name #ty_generics #where_clause {
-                #[inline]
-                fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-                    ::markup::Render::render(self, fmt)
                 }
             }
         })
@@ -117,25 +109,25 @@ impl Generate for Element {
             children,
             close,
         } = self;
-        stream.raw("<");
+        stream.raw(b"<");
         stream.expr(name);
         if let Some(id) = id {
-            stream.raw(" id=\"");
+            stream.raw(b" id=\"");
             stream.expr(id);
-            stream.raw("\"");
+            stream.raw(b"\"");
         }
         if !classes.is_empty() {
-            stream.raw(" class=\"");
+            stream.raw(b" class=\"");
             let mut first = true;
             for class in classes {
                 if first {
                     first = false;
                 } else {
-                    stream.raw(" ");
+                    stream.raw(b" ");
                 }
                 stream.expr(class);
             }
-            stream.raw("\"");
+            stream.raw(b"\"");
         }
 
         fn attr(stream: &mut Stream, name: &syn::Expr, value: &syn::Expr) {
@@ -147,16 +139,16 @@ impl Generate for Element {
             stream.braced(|_| {});
             stream.extend(quote!(else if ::markup::RenderAttributeValue::is_true(&__value)));
             stream.braced(|stream| {
-                stream.raw(" ");
+                stream.raw(b" ");
                 stream.expr(name);
             });
             stream.extend(quote!(else));
             stream.braced(|stream| {
-                stream.raw(" ");
+                stream.raw(b" ");
                 stream.expr(name);
-                stream.raw("=\"");
+                stream.raw(b"=\"");
                 stream.expr(&syn::parse_quote!(__value));
-                stream.raw("\"");
+                stream.raw(b"\"");
             });
         }
 
@@ -176,14 +168,14 @@ impl Generate for Element {
             }
         }
 
-        stream.raw(">");
+        stream.raw(b">");
 
         children.generate(stream);
 
         if *close {
-            stream.raw("</");
+            stream.raw(b"</");
             stream.expr(name);
-            stream.raw(">");
+            stream.raw(b">");
         }
     }
 }
@@ -248,18 +240,18 @@ impl Generate for For {
 #[derive(Default)]
 struct Stream {
     stream: TokenStream,
-    buffer: String,
+    buffer: Vec<u8>,
 }
 
 impl Stream {
-    fn raw(&mut self, str: &str) {
-        self.buffer.push_str(str);
+    fn raw(&mut self, str: &[u8]) {
+        self.buffer.extend_from_slice(str);
     }
 
-    fn escaped(&mut self, str: &str) {
-        let mut string = String::new();
+    fn escaped(&mut self, str: &[u8]) {
+        let mut string = Vec::new();
         crate::escape::escape(str, &mut string).unwrap();
-        self.buffer.push_str(&string);
+        self.buffer.extend_from_slice(&string);
     }
 
     fn expr(&mut self, expr: &syn::Expr) {
@@ -267,16 +259,16 @@ impl Stream {
             syn::Expr::Lit(syn::ExprLit {
                 lit: syn::Lit::Str(lit_str),
                 ..
-            }) => self.escaped(&lit_str.value()),
-            _ => self.extend(quote!(::markup::Render::render(&(#expr), __writer)?;)),
+            }) => self.escaped(&lit_str.value().as_bytes()),
+            _ => self.extend(quote!(::markup::Render::render((#expr), __writer)?;)),
         }
     }
 
     fn extend<Iter: IntoIterator<Item = TokenTree>>(&mut self, iter: Iter) {
         if !self.buffer.is_empty() {
-            let buffer = &self.buffer;
+            let buffer = proc_macro2::Literal::byte_string(&self.buffer);
             self.stream.extend(quote! {
-                __writer.write_str(#buffer)?;
+                __writer.write_all(#buffer)?;
             });
             self.buffer.clear();
         }
