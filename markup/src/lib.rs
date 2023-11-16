@@ -143,8 +143,8 @@ impl Render for char {
     #[inline(always)]
     fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
         let mut b = [0u8;4];
-        self.encode_utf8(&mut b);
-        writer.write_all(&b)
+        let s = self.encode_utf8(&mut b);
+        writer.write_all(s.as_bytes())
     }
 }
 
