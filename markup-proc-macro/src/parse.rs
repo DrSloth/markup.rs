@@ -75,6 +75,9 @@ impl Parse for Node {
             if lookahead.peek(syn::token::If) {
                 let _: syn::token::If = input.parse()?;
                 Ok(Node::If(input.parse()?))
+            } else if lookahead.peek(syn::Token![>]) {
+                let _: syn::Token![>] = input.parse()?;
+                Ok(Node::FunctionCall(input.parse()?))
             } else if lookahead.peek(syn::token::For) {
                 let _: syn::token::For = input.parse()?;
                 Ok(Node::For(input.parse()?))

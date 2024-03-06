@@ -22,6 +22,7 @@ pub enum Node {
     Expr(syn::Expr),
     Stmt(syn::Stmt),
     Match(Match),
+    FunctionCall(syn::Expr)
 }
 
 #[derive(Debug)]

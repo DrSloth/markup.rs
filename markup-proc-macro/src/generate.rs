@@ -95,6 +95,7 @@ impl Generate for Node {
             Node::For(for_) => for_.generate(stream),
             Node::Expr(expr) => stream.expr(expr),
             Node::Stmt(stmt) => stream.extend(stmt.into_token_stream()),
+            Node::FunctionCall(f) => stream.extend(quote!{#f(__writer)?;})
         }
     }
 }
