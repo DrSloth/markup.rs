@@ -20,4 +20,4 @@ default = ["raw_disp"]
 [dependencies]
 markup-proc-macro = { path = "../markup-proc-macro", version = "0.13.1" }
 itoa = { version = "1.0.6", optional = true }
-
+thiserror = "1.0.59"

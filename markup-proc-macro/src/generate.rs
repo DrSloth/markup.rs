@@ -43,12 +43,12 @@ impl ToTokens for Struct {
             impl #impl_generics #name #ty_generics #where_clause {
                 /// Write this Element to the given string via [`markup::Render`]
                 #[inline(always)]
-                pub fn write_to_vec(self, sbuf: &mut Vec<u8>) -> std::io::Result<()> {
+                pub fn write_to_vec(self, sbuf: &mut Vec<u8>) -> ::std::result::Result<(), ::markup::RenderError> {
                     <Self as ::markup::Render>::render(self, sbuf)
                 }
             }
             impl #impl_generics ::markup::Render for #name #ty_generics #where_clause {
-                fn render(self, __writer: &mut impl std::io::Write) -> std::io::Result<()> {
+                fn render(self, __writer: &mut impl std::io::Write) -> ::std::result::Result<(), ::markup::RenderError> {
                     let #name { #splat_fields } = self;
                     #built
                     Ok(())

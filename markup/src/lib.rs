@@ -2,8 +2,16 @@ pub use markup_proc_macro::{define, new};
 
 mod escape;
 
+#[derive(Debug, thiserror::Error)]
+pub enum RenderError {
+    #[error("An io error occured while rendering: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("Custom error: {0}")]
+    Other(Box<dyn std::error::Error>)
+}
+
 pub trait Render {
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()>;
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError>;
 }
 
 pub trait RenderAttributeValue: Render {
@@ -23,15 +31,9 @@ pub trait RenderAttributeValue: Render {
     }
 }
 
-impl<T: Render + Copy> Render for &T {
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
-        (*self).render(writer)
-    }
-}
-
 impl<T: Render> Render for Box<T> {
     #[inline]
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
         T::render(*self, writer)
     }
 }
@@ -55,12 +57,13 @@ impl<T: RenderAttributeValue> RenderAttributeValue for Box<T> {
 
 impl Render for bool {
     #[inline]
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
         if self {
-            writer.write_all(b"true")
+            writer.write_all(b"true")?;
         } else {
-            writer.write_all(b"false")
+            writer.write_all(b"false")?;
         }
+        Ok(())
     }
 }
 
@@ -78,7 +81,7 @@ impl RenderAttributeValue for bool {
 
 impl<T: Render> Render for Option<T> {
     #[inline]
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
         match self {
             Some(t) => t.render(writer),
             None => Ok(()),
@@ -101,8 +104,9 @@ mod _raw_disp {
 
     impl<T: std::fmt::Display> Render for Raw<T> {
         #[inline]
-        fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
-            write!(writer, "{}", self.0)
+        fn render(self, writer: &mut impl std::io::Write) -> Result<(), super::RenderError> {
+            write!(writer, "{}", self.0)?;
+            Ok(())
         }
     }
 
@@ -119,8 +123,9 @@ pub struct RawBytes<T: AsRef<[u8]>>(T);
 
 impl<T: AsRef<[u8]>> Render for RawBytes<T> {
     #[inline(always)]
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
-        writer.write_all(self.0.as_ref())
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
+        writer.write_all(self.0.as_ref())?;
+        Ok(())
     }
 }
 
@@ -141,10 +146,11 @@ macro_rules! tfor {
 
 impl Render for char {
     #[inline(always)]
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
         let mut b = [0u8;4];
         let s = self.encode_utf8(&mut b);
-        writer.write_all(s.as_bytes())
+        writer.write_all(s.as_bytes())?;
+        Ok(())
     }
 }
 
@@ -154,8 +160,9 @@ tfor! {
     for Ty in [f32, f64] {
         impl Render for Ty {
             #[inline]
-            fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
-                write!(writer, "{}", self)
+            fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
+                write!(writer, "{}", self)?;
+                Ok(())
             }
         }
 
@@ -168,7 +175,7 @@ tfor! {
     for Ty in [u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize] {
         impl Render for Ty {
             #[inline]
-            fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+            fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
                 #[cfg(feature = "itoa")] {
                     let mut buffer = itoa::Buffer::new();
                     let str = buffer.format(self);
@@ -176,7 +183,8 @@ tfor! {
                     Ok(())
                 }
                 #[cfg(not(feature = "itoa"))] {
-                    write!(writer, "{}", self)
+                    write!(writer, "{}", self)?;
+                    Ok(())
                 }
             }
         }
@@ -188,8 +196,9 @@ tfor! {
 
 impl Render for &str {
     #[inline]
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
-        escape::escape(self.as_bytes(), writer)
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
+        escape::escape(self.as_bytes(), writer)?;
+        Ok(())
     }
 }
 
@@ -197,19 +206,28 @@ impl RenderAttributeValue for &str {}
 
 impl Render for String {
     #[inline]
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
         self.as_str().render(writer)
     }
 }
 
 impl RenderAttributeValue for String {}
 
+impl<'a> Render for std::borrow::Cow<'a, str> {
+    #[inline]
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
+        (&*self).render(writer)
+    }
+}
+
+impl<'a> RenderAttributeValue for std::borrow::Cow<'a, str> {}
+
 macro_rules! tuple_impl {
     ($($ident:ident)+) => {
         impl<$($ident: Render,)+> Render for ($($ident,)+) {
             #[allow(non_snake_case)]
             #[inline]
-            fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+            fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
                 let ($($ident,)+) = self;
                 $($ident.render(writer)?;)+
                 Ok(())
@@ -233,19 +251,19 @@ tuple_impl! { A B C D E F G H I }
 tuple_impl! { A B C D E F G H I J }
 
 pub struct DynRender<'a> {
-    f: Box<dyn Fn(&mut dyn std::io::Write) -> std::io::Result<()> + 'a>,
+    f: Box<dyn Fn(&mut dyn std::io::Write) -> Result<(), RenderError> + 'a>,
 }
 
 pub fn new<'a, F>(f: F) -> DynRender<'a>
 where
-    F: Fn(&mut dyn std::io::Write) -> std::io::Result<()> + 'a,
+    F: Fn(&mut dyn std::io::Write) -> Result<(), RenderError> + 'a,
 {
     DynRender { f: Box::new(f) }
 }
 
 impl<'a> Render for DynRender<'a> {
     #[inline]
-    fn render(self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+    fn render(self, writer: &mut impl std::io::Write) -> Result<(), RenderError> {
         (self.f)(writer)
     }
 }
