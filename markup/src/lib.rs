@@ -3,16 +3,16 @@ pub use markup_proc_macro::{define, new};
 mod escape;
 
 #[derive(Debug, thiserror::Error)]
-pub enum RenderError<Other: std::error::Error = std::convert::Infallible> {
+pub enum RenderError {
     #[error("An io error occured while rendering: {0}")]
     IoError(#[from] std::io::Error),
     #[error("Custom error: {0}")]
-    Other(Other)
+    Other(Box<dyn std::error::Error + Send + Sync + 'static>)
 }
 
-impl<Other: std::error::Error> RenderError<Other> {
-    pub fn wrap(e: Other) -> Self {
-        Self::Other(e)
+impl RenderError {
+    pub fn wrap<E: std::error::Error + Send + Sync + 'static>(e: E) -> Self {
+        Self::Other(Box::new(e))
     }
 }
 
