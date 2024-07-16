@@ -7,7 +7,7 @@ pub enum RenderError {
     #[error("An io error occured while rendering: {0}")]
     IoError(#[from] std::io::Error),
     #[error("Custom error: {0}")]
-    Other(Box<dyn std::error::Error>)
+    Other(Box<dyn std::error::Error + Send + Sync>)
 }
 
 pub trait Render {
